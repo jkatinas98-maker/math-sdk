@@ -6,16 +6,23 @@ is built around reel/board games and reweights symbol distributions to hit an
 exact target RTP across many feature types -- overkill, and the wrong shape,
 for a single-draw scratch ticket). Instead it:
 
-  1. Simulates millions of real tickets using the exact draw + resolve logic
-     the front-end prototype uses (weighted random panel draws, first symbol
-     to reach 3 matches wins, ticket ends when all panels are revealed).
-  2. Measures real RTP, hit frequency, and win distribution per difficulty.
-  3. Writes out:
-       - books_<difficulty>.jsonl  (one simulated round each, in the
+  1. Simulates millions of real bets using the exact draw + resolve logic the
+     front-end uses (weighted random panel draws per card, ALL panels always
+     revealed, first symbol to reach 3 matches wins that card, 3+ `bonus`
+     scatters anywhere on a card award 10 free scratches -- each one another
+     card of the same mode, which can itself retrigger the feature).
+  2. Measures real total RTP (cash wins + the bonus feature's contribution),
+     hit frequency, bonus-trigger frequency, and win distribution per
+     difficulty.
+  3. Writes out, per difficulty:
+       - books_<difficulty>.jsonl  (one simulated ROUND each -- base card
+         plus every free-scratch card it awarded, if any -- in the
          book/bookEvent shape the web-sdk front end already expects:
-         reveal-style events + a final payout multiplier)
+         one `revealPanels` event per card scratched this round, a
+         `setTotalWin`/`finalWin` pair for the round's cumulative payout,
+         and a `freeScratchesAwarded` field)
        - lookup_<difficulty>.csv   (id, weight, payoutMultiplier -- the
-         standard math-sdk "lookup table" shape that the RGS uses to pick a
+         standard math-sdk "lookup table" shape the RGS uses to pick a
          weighted-random outcome per real bet)
 
 Run:
@@ -49,25 +56,49 @@ def weighted_choice(symbols, rng):
     return symbols[-1]
 
 
-def play_ticket(symbols, n_panels, rng):
-    """Draw panels one at a time; stop at the first 3-of-a-kind match or when
-    the ticket is fully revealed. Returns (revealed_symbol_ids, win_symbol_or_None)."""
-    n = n_panels
+def play_card(symbols, n_panels, rng, bonus_trigger_count):
+    """Draw every panel on one card (no early stop -- matches the front end,
+    which always reveals the full grid). Returns (revealed_symbols,
+    win_symbol_or_None, bonus_triggered: bool)."""
     counts = defaultdict(int)
     revealed = []
     win_symbol = None
-    for _ in range(n):
+    bonus_count = 0
+    for _ in range(n_panels):
         sym = weighted_choice(symbols, rng)
         revealed.append(sym)
+        if sym.is_bonus:
+            bonus_count += 1
+            continue
         if sym.mult > 0:
             counts[sym.id] += 1
-            if counts[sym.id] >= 3:
+            if counts[sym.id] == 3 and win_symbol is None:
                 win_symbol = sym
-                break
-    return revealed, win_symbol
+    return revealed, win_symbol, bonus_count >= bonus_trigger_count
 
 
-def simulate_mode(mode_name, cols, rows, symbols, num_sims, rng, write_books=True):
+def play_round(symbols, n_panels, rng, bonus_trigger_count, free_scratches_awarded, max_cards=200):
+    """One full betting round: the base card, plus every free-scratch card
+    it (recursively) awards. `max_cards` is a safety cap, not a real limit --
+    with these weights the chain almost never exceeds a handful of cards."""
+    cards = []
+    total_mult = 0.0
+    total_free_awarded = 0
+    queue = 1
+    while queue > 0 and len(cards) < max_cards:
+        queue -= 1
+        revealed, win_symbol, bonus_triggered = play_card(symbols, n_panels, rng, bonus_trigger_count)
+        mult = win_symbol.mult if win_symbol else 0.0
+        total_mult += mult
+        cards.append((revealed, win_symbol, bonus_triggered))
+        if bonus_triggered:
+            total_free_awarded += free_scratches_awarded
+            queue += free_scratches_awarded
+    return cards, total_mult, total_free_awarded
+
+
+def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scratches_awarded,
+                   num_sims, rng, write_books=True):
     n_panels = cols * rows
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     books_path = OUT_DIR / f"books_{mode_name}.jsonl"
@@ -76,44 +107,57 @@ def simulate_mode(mode_name, cols, rows, symbols, num_sims, rng, write_books=Tru
     total_bet = 0.0
     total_paid = 0.0
     wins = 0
+    bonus_rounds = 0
     max_win_mult = 0.0
     win_by_symbol = defaultdict(int)
 
-    # lookup table: distinct payout outcomes -> occurrence count (used as weight)
+    # lookup table: distinct round-level payout outcomes -> occurrence count (used as weight)
     lookup_counts = defaultdict(int)
 
     books_file = open(books_path, "w") if write_books else None
 
     for sim_id in range(1, num_sims + 1):
-        revealed, win_symbol = play_ticket(symbols, n_panels, rng)
-        payout_mult = win_symbol.mult if win_symbol else 0.0
+        cards, round_mult, free_awarded = play_round(
+            symbols, n_panels, rng, bonus_trigger_count, free_scratches_awarded
+        )
 
         total_bet += 1.0
-        total_paid += payout_mult
-        if win_symbol:
+        total_paid += round_mult
+        if round_mult > 0:
             wins += 1
-            win_by_symbol[win_symbol.id] += 1
-            max_win_mult = max(max_win_mult, payout_mult)
+            # credit the win to the base card's winning symbol for the breakdown report
+            base_win = cards[0][1]
+            if base_win:
+                win_by_symbol[base_win.id] += 1
+            max_win_mult = max(max_win_mult, round_mult)
+        if free_awarded > 0:
+            bonus_rounds += 1
 
-        lookup_counts[round(payout_mult, 4)] += 1
+        lookup_counts[round(round_mult, 4)] += 1
 
         if books_file:
+            events = []
+            idx = 0
+            for revealed, win_symbol, bonus_triggered in cards:
+                events.append({
+                    "index": idx,
+                    "type": "revealPanels",
+                    "panels": [{"name": s.id} for s in revealed],
+                    "gameType": "basegame" if idx == 0 else "freegame",
+                })
+                idx += 1
+            events.append({"index": idx, "type": "setTotalWin", "amount": round_mult})
+            idx += 1
+            events.append({"index": idx, "type": "finalWin", "amount": round_mult})
+
             book = {
                 "id": sim_id,
-                "payoutMultiplier": payout_mult,
-                "events": [
-                    {
-                        "index": 0,
-                        "type": "revealPanels",
-                        "panels": [{"name": s.id} for s in revealed],
-                        "gameType": "basegame",
-                    },
-                    {"index": 1, "type": "setTotalWin", "amount": payout_mult},
-                    {"index": 2, "type": "finalWin", "amount": payout_mult},
-                ],
-                "criteria": win_symbol.id if win_symbol else "none",
-                "baseGameWins": payout_mult,
-                "freeGameWins": 0.0,
+                "payoutMultiplier": round_mult,
+                "events": events,
+                "criteria": cards[0][1].id if cards[0][1] else "none",
+                "baseGameWins": cards[0][1].mult if cards[0][1] else 0.0,
+                "freeGameWins": round_mult - (cards[0][1].mult if cards[0][1] else 0.0),
+                "freeScratchesAwarded": free_awarded,
             }
             books_file.write(json.dumps(book) + "\n")
 
@@ -129,6 +173,7 @@ def simulate_mode(mode_name, cols, rows, symbols, num_sims, rng, write_books=Tru
 
     rtp = total_paid / total_bet
     hit_rate = wins / num_sims
+    bonus_rate = bonus_rounds / num_sims
 
     return {
         "mode": mode_name,
@@ -136,6 +181,7 @@ def simulate_mode(mode_name, cols, rows, symbols, num_sims, rng, write_books=Tru
         "sims": num_sims,
         "rtp": rtp,
         "hit_rate": hit_rate,
+        "bonus_rate": bonus_rate,
         "max_win_mult": max_win_mult,
         "win_by_symbol": dict(win_by_symbol),
         "distinct_outcomes": len(lookup_counts),
@@ -149,21 +195,24 @@ def main():
     results = []
     for mode_name, spec in config.difficulties.items():
         res = simulate_mode(
-            mode_name, spec["cols"], spec["rows"], spec["symbols"], SIMS_PER_MODE, rng
+            mode_name, spec["cols"], spec["rows"], spec["symbols"],
+            config.bonus_trigger_count, config.free_scratches_awarded,
+            SIMS_PER_MODE, rng,
         )
         results.append(res)
 
-    print(f"\nSCRATCH -- Monte Carlo RTP report ({SIMS_PER_MODE:,} tickets per mode)\n")
-    header = f"{'Mode':<8}{'Grid':<8}{'RTP':<10}{'Hit rate':<12}{'Max win':<10}"
+    print(f"\nSCRATCH -- Monte Carlo RTP report ({SIMS_PER_MODE:,} rounds per mode, "
+          f"bonus = {config.bonus_trigger_count}+ scatters -> {config.free_scratches_awarded} free scratches)\n")
+    header = f"{'Mode':<8}{'Grid':<8}{'RTP':<10}{'Hit rate':<12}{'Bonus rate':<13}{'Max win':<10}"
     print(header)
     print("-" * len(header))
     for r in results:
         print(
             f"{r['mode']:<8}{r['grid_size']:<8}{r['rtp']*100:>6.2f}%   "
-            f"{r['hit_rate']*100:>7.2f}%    {r['max_win_mult']:>6g}x"
+            f"{r['hit_rate']*100:>7.2f}%    {r['bonus_rate']*100:>8.4f}%    {r['max_win_mult']:>6g}x"
         )
 
-    print("\nWin breakdown by symbol (share of all wins):")
+    print("\nWin breakdown by symbol, base card only (share of all wins):")
     for r in results:
         print(f"\n  {r['mode']}:")
         total_wins = sum(r["win_by_symbol"].values()) or 1
