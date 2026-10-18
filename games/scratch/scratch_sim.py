@@ -165,15 +165,24 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
                     "gameType": "basegame" if idx == 0 else "freegame",
                 })
                 idx += 1
-            events.append({"index": idx, "type": "setTotalWin", "amount": payout_cents})
+            # NOTE: these "amount" fields are OUR OWN event schema, consumed
+            # directly by the front end's book-event player as the real
+            # decimal win multiplier (e.g. 1.5) -- NOT Stake's RGS wire
+            # format. Only the top-level "payoutMultiplier" below is the
+            # x100 fixed-point integer their spec requires. Using
+            # payout_cents here too was the bug: the front end displayed/
+            # credited the scaled integer (150) as if it were the real
+            # multiplier, inflating every win 100x.
+            events.append({"index": idx, "type": "setTotalWin", "amount": round_mult})
             idx += 1
-            events.append({"index": idx, "type": "finalWin", "amount": payout_cents})
+            events.append({"index": idx, "type": "finalWin", "amount": round_mult})
 
             book = {
                 "id": sim_id,
                 # Integer, fixed-point x100 (11.5x -> 1150) per
                 # docs/rgs_docs/data_format.md -- this IS the final
                 # published value, not an intermediate one rescaled later.
+                # (Only this field; "events" above stay in real multiplier units.)
                 "payoutMultiplier": payout_cents,
                 "events": events,
                 "criteria": cards[0][1].id if cards[0][1] else "none",
