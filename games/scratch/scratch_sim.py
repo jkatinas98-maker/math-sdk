@@ -111,8 +111,18 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     max_win_mult = 0.0
     win_by_symbol = defaultdict(int)
 
-    # lookup table: distinct round-level payout outcomes -> occurrence count (used as weight)
-    lookup_counts = defaultdict(int)
+    # Lookup table: ONE ROW PER SIMULATION ID, 1:1 with the books file --
+    # not deduplicated by distinct payout value. Per
+    # docs/math_docs/source_section/file_info.md: "The final payout
+    # multiplier for each simulation is summarized in lookUpTable_mode.csv
+    # ... weights, initially assigned to 1" -- every simulation gets its
+    # own row and starts at weight 1 (pre-optimization; we aren't running
+    # the Rust reweighting pass). A deduplicated table (what this used to
+    # build) only has as many rows as there are distinct payout values,
+    # leaving every simulation id beyond that count with nothing to match
+    # against in the RGS's id-aligned cross-check -- that mismatch is what
+    # ERR_MATH_OUTSIDE_RANGE was actually reporting, not a rounding bug.
+    lookup_rows = []
 
     books_file = open(books_path, "w") if write_books else None
 
@@ -142,7 +152,7 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
         # here, and reusing that same number everywhere removes the
         # possibility of the two files ever drifting apart.
         payout_cents = round(round_mult * 100)
-        lookup_counts[payout_cents] += 1
+        lookup_rows.append((sim_id, payout_cents))
 
         if books_file:
             events = []
@@ -176,14 +186,15 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     if books_file:
         books_file.close()
 
-    # lookup table: id, weight, payoutMultiplier (weight = observed
-    # frequency; payoutMultiplier already in the same x100 integer form
-    # written to the books file above -- no separate rescaling step).
+    # lookup table: id, weight, payoutMultiplier -- one row per simulation,
+    # same id as that simulation's book entry, weight=1 for every row
+    # (uniform / pre-optimization), payoutMultiplier already in the same
+    # x100 integer form written to the books file above.
     with open(lookup_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["id", "weight", "payoutMultiplier"])
-        for i, (mult, count) in enumerate(sorted(lookup_counts.items()), start=1):
-            w.writerow([i, count, mult])
+        for sim_id, mult in lookup_rows:
+            w.writerow([sim_id, 1, mult])
 
     rtp = total_paid / total_bet
     hit_rate = wins / num_sims
@@ -198,7 +209,7 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
         "bonus_rate": bonus_rate,
         "max_win_mult": max_win_mult,
         "win_by_symbol": dict(win_by_symbol),
-        "distinct_outcomes": len(lookup_counts),
+        "distinct_outcomes": len(set(mult for _, mult in lookup_rows)),
     }
 
 
