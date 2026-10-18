@@ -133,7 +133,16 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
         if free_awarded > 0:
             bonus_rounds += 1
 
-        lookup_counts[round(round_mult, 4)] += 1
+        # Canonical payout value for THIS round, computed once and reused
+        # for both the book and the lookup table below -- any float
+        # (round_mult vs. round(round_mult, 4) computed separately) can
+        # disagree by floating-point noise on compound bonus-chain sums,
+        # which the RGS's hash-based cross-check between the two files
+        # will reject (ERR_MATH_OUTSIDE_RANGE). Rounding to cents once,
+        # here, and reusing that same number everywhere removes the
+        # possibility of the two files ever drifting apart.
+        payout_cents = round(round_mult * 100)
+        lookup_counts[payout_cents] += 1
 
         if books_file:
             events = []
@@ -146,13 +155,16 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
                     "gameType": "basegame" if idx == 0 else "freegame",
                 })
                 idx += 1
-            events.append({"index": idx, "type": "setTotalWin", "amount": round_mult})
+            events.append({"index": idx, "type": "setTotalWin", "amount": payout_cents})
             idx += 1
-            events.append({"index": idx, "type": "finalWin", "amount": round_mult})
+            events.append({"index": idx, "type": "finalWin", "amount": payout_cents})
 
             book = {
                 "id": sim_id,
-                "payoutMultiplier": round_mult,
+                # Integer, fixed-point x100 (11.5x -> 1150) per
+                # docs/rgs_docs/data_format.md -- this IS the final
+                # published value, not an intermediate one rescaled later.
+                "payoutMultiplier": payout_cents,
                 "events": events,
                 "criteria": cards[0][1].id if cards[0][1] else "none",
                 "baseGameWins": cards[0][1].mult if cards[0][1] else 0.0,
@@ -164,7 +176,9 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     if books_file:
         books_file.close()
 
-    # lookup table: id, weight, payoutMultiplier (weight = observed frequency)
+    # lookup table: id, weight, payoutMultiplier (weight = observed
+    # frequency; payoutMultiplier already in the same x100 integer form
+    # written to the books file above -- no separate rescaling step).
     with open(lookup_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["id", "weight", "payoutMultiplier"])
