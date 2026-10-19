@@ -10,20 +10,47 @@ for a single-draw scratch ticket). Instead it:
      front-end uses (weighted random panel draws per card, ALL panels always
      revealed, first symbol to reach 3 matches wins that card, 3+ `bonus`
      scatters anywhere on a card award 10 free scratches -- each one another
-     card of the same mode, which can itself retrigger the feature).
-  2. Measures real total RTP (cash wins + the bonus feature's contribution),
-     hit frequency, bonus-trigger frequency, and win distribution per
-     difficulty.
+     card of the same mode, which can itself retrigger the feature), PLUS
+     three newer mechanics layered on top of the same per-card draw:
+       - Treasure Meter: landing 4-of-a-kind (+1 point) or 5-plus-of-a-kind
+         (+2 points) on any mult>0 symbol accumulates across the whole round;
+         crossing the mode's threshold pops the meter and fires a Treasure
+         Chest case-opening sequence.
+       - `key` symbol: each one landed fires its own chest sequence directly
+         (same sequence the meter pop fires), independent of the meter.
+       - Treasure Chest case-opening: NOT a pick-one-of-three. Every trigger
+         opens `chests_per_trigger` (3) independent chests in sequence, each
+         drawn from one shared prize table (cash / multiplier-boost /
+         retrigger / another key). All chests always resolve -- retrigger
+         and key outcomes queue MORE chest opens (capped), they don't end
+         the sequence early.
+       - Kraken number-match: every card independently has a per-difficulty
+         chance to show the kraken at all (frequent); when it shows, a
+         hidden player number and a hidden kraken number (both 1..10,
+         uniform) are compared -- a match (rare, ~1-in-10 of the cards that
+         show it) pays a flat kraken_match_mult.
+  2. Measures real total RTP (cash wins + every feature's EV), hit
+     frequency, bonus-trigger frequency, treasure-meter-pop frequency,
+     kraken-hit frequency, and win distribution per difficulty.
   3. Writes out, per difficulty:
        - books_<difficulty>.jsonl  (one simulated ROUND each -- base card
          plus every free-scratch card it awarded, if any -- in the
-         book/bookEvent shape the web-sdk front end already expects:
-         one `revealPanels` event per card scratched this round, a
-         `setTotalWin`/`finalWin` pair for the round's cumulative payout,
-         and a `freeScratchesAwarded` field)
+         book/bookEvent shape the web-sdk front end already expects: one
+         `revealPanels` event per card scratched this round, immediately
+         followed by any `krakenResult`/`chestSequence` events that card's
+         draw caused, then a `setTotalWin`/`finalWin` pair for the round's
+         cumulative payout, and a `freeScratchesAwarded` field)
        - lookup_<difficulty>.csv   (id, weight, payoutMultiplier -- the
          standard math-sdk "lookup table" shape the RGS uses to pick a
          weighted-random outcome per real bet)
+
+NOTE ON WEIGHT CALIBRATION: the Treasure Meter / Chest / Kraken weights in
+game_config.py are PROVISIONAL. There is no automated `calibrate.py` in this
+repo (despite an older comment referencing one) -- they were hand-tuned by
+re-running this file and reading its printed RTP report, nudging
+chest_prize_table / kraken_trigger_chance / treasure_meter_threshold until
+each mode's measured total RTP landed back near game_config.py's 0.96
+target. Re-run and re-check after any further change to these mechanics.
 
 Run:
     python3 scratch_sim.py
@@ -56,49 +83,162 @@ def weighted_choice(symbols, rng):
     return symbols[-1]
 
 
-def play_card(symbols, n_panels, rng, bonus_trigger_count):
+def roll_chest_prize(prize_table, rng):
+    """prize_table rows are (id, kind, value, weight)."""
+    total = sum(row[3] for row in prize_table)
+    r = rng.random() * total
+    acc = 0.0
+    for row in prize_table:
+        acc += row[3]
+        if r < acc:
+            return row
+    return prize_table[-1]
+
+
+def resolve_chest_sequence(prize_table, chests_per_trigger, num_opens, rng, opens_budget, current_total):
+    """Resolves one full chest-opening sequence: `num_opens` chests, expanding
+    by `value` more opens whenever a 'retrigger' lands, or by
+    `value * chests_per_trigger` more whenever a 'key' lands (each extra key
+    is its own full chest sequence). `opens_budget` is this round's
+    remaining safety-cap allowance. Cash prizes add to the running total
+    immediately; multiplier-boost prizes multiply it -- both applied in
+    resolution order, interleaved with whatever retrigger/key opens they
+    cause, so the sequence behaves like a single ordered chain of chest
+    pulls, not three independent ones scored after the fact.
+
+    Returns (outcomes: list[(id, kind, value)], new_total, opens_used).
+    """
+    outcomes = []
+    total = current_total
+    queue = num_opens
+    opened = 0
+    while queue > 0 and opened < opens_budget:
+        queue -= 1
+        opened += 1
+        prize_id, kind, value, _weight = roll_chest_prize(prize_table, rng)
+        outcomes.append((prize_id, kind, value))
+        if kind == "cash":
+            total += value
+        elif kind == "multiplier":
+            total *= value
+        elif kind == "retrigger":
+            queue += value
+        elif kind == "key":
+            queue += value * chests_per_trigger
+    return outcomes, total, opened
+
+
+def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, kraken_chance, kraken_range):
     """Draw every panel on one card (no early stop -- matches the front end,
-    which always reveals the full grid). Returns (revealed_symbols,
-    win_symbol_or_None, bonus_triggered: bool)."""
+    which always reveals the full grid).
+
+    Returns (revealed_symbols, win_symbol_or_None, bonus_triggered: bool,
+    meter_points: int, key_count: int, kraken: dict|None).
+    """
     counts = defaultdict(int)
     revealed = []
     win_symbol = None
     bonus_count = 0
+    key_count = 0
     for _ in range(n_panels):
         sym = weighted_choice(symbols, rng)
         revealed.append(sym)
         if sym.is_bonus:
             bonus_count += 1
             continue
+        if sym.is_key:
+            key_count += 1
+            continue
         if sym.mult > 0:
             counts[sym.id] += 1
             if counts[sym.id] == 3 and win_symbol is None:
                 win_symbol = sym
-    return revealed, win_symbol, bonus_count >= bonus_trigger_count
+
+    meter_points = 0
+    for count in counts.values():
+        if count >= 5:
+            meter_points += meter_points_table[5]
+        elif count == 4:
+            meter_points += meter_points_table[4]
+
+    kraken = None
+    if rng.random() < kraken_chance:
+        player_num = rng.randint(1, kraken_range)
+        kraken_num = rng.randint(1, kraken_range)
+        kraken = {"player": player_num, "kraken": kraken_num, "hit": player_num == kraken_num}
+
+    return revealed, win_symbol, bonus_count >= bonus_trigger_count, meter_points, key_count, kraken
 
 
-def play_round(symbols, n_panels, rng, bonus_trigger_count, free_scratches_awarded, max_cards=200):
-    """One full betting round: the base card, plus every free-scratch card
-    it (recursively) awards. `max_cards` is a safety cap, not a real limit --
-    with these weights the chain almost never exceeds a handful of cards."""
+def play_round(cfg, symbols, n_panels, mode_name, rng, max_cards=200):
+    """One full betting round: the base card, plus every free-scratch card it
+    (recursively) awards, plus every Treasure Chest sequence the round's
+    meter pops / key drops trigger, plus every Kraken roll. `max_cards` is a
+    safety cap on free-scratch chaining (unchanged from before); chest-open
+    recursion has its own separate cap, cfg.max_chest_opens_per_round.
+
+    Returns (cards, total_mult, total_free_awarded) where each entry in
+    `cards` is (revealed, win_symbol, bonus_triggered, meter_points,
+    key_count, kraken, chest_sequences) -- chest_sequences is the list of
+    sequences (each a list of (id, kind, value) outcomes) THAT CARD caused,
+    in trigger order (meter-pop sequences before key-drop sequences when
+    both happen on the same card).
+    """
+    meter_threshold = cfg.treasure_meter_threshold[mode_name]
+    meter_points_table = cfg.treasure_meter_points
+    chests_per_trigger = cfg.chests_per_trigger
+    prize_table = cfg.chest_prize_table
+    max_chest_opens = cfg.max_chest_opens_per_round
+    kraken_chance = cfg.kraken_trigger_chance[mode_name]
+    kraken_range = cfg.kraken_number_range
+    kraken_mult = cfg.kraken_match_mult
+
     cards = []
     total_mult = 0.0
     total_free_awarded = 0
+    meter_points_acc = 0
+    chest_opens_used = 0
     queue = 1
+
     while queue > 0 and len(cards) < max_cards:
         queue -= 1
-        revealed, win_symbol, bonus_triggered = play_card(symbols, n_panels, rng, bonus_trigger_count)
+        revealed, win_symbol, bonus_triggered, meter_pts, key_count, kraken = play_card(
+            symbols, n_panels, rng, cfg.bonus_trigger_count, meter_points_table, kraken_chance, kraken_range,
+        )
         mult = win_symbol.mult if win_symbol else 0.0
         total_mult += mult
-        cards.append((revealed, win_symbol, bonus_triggered))
+
         if bonus_triggered:
-            total_free_awarded += free_scratches_awarded
-            queue += free_scratches_awarded
+            total_free_awarded += cfg.free_scratches_awarded
+            queue += cfg.free_scratches_awarded
+
+        if kraken and kraken["hit"]:
+            total_mult += kraken_mult
+
+        meter_points_acc += meter_pts
+        chest_triggers = key_count
+        while meter_points_acc >= meter_threshold:
+            meter_points_acc -= meter_threshold
+            chest_triggers += 1
+
+        card_chest_sequences = []
+        for _ in range(chest_triggers):
+            if chest_opens_used >= max_chest_opens:
+                break
+            outcomes, total_mult, opened = resolve_chest_sequence(
+                prize_table, chests_per_trigger, chests_per_trigger, rng,
+                max_chest_opens - chest_opens_used, total_mult,
+            )
+            chest_opens_used += opened
+            card_chest_sequences.append(outcomes)
+
+        cards.append((revealed, win_symbol, bonus_triggered, meter_pts, key_count, kraken, card_chest_sequences))
+
     return cards, total_mult, total_free_awarded
 
 
-def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scratches_awarded,
-                   num_sims, rng, write_books=True):
+def simulate_mode(mode_name, cols, rows, cfg, num_sims, rng, write_books=True):
+    symbols = cfg.difficulties[mode_name]["symbols"]
     n_panels = cols * rows
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     books_path = OUT_DIR / f"books_{mode_name}.jsonl"
@@ -108,6 +248,10 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     total_paid = 0.0
     wins = 0
     bonus_rounds = 0
+    meter_pop_rounds = 0
+    key_trigger_rounds = 0
+    kraken_shown_rounds = 0
+    kraken_hit_rounds = 0
     max_win_mult = 0.0
     win_by_symbol = defaultdict(int)
 
@@ -127,9 +271,7 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     books_file = open(books_path, "w") if write_books else None
 
     for sim_id in range(1, num_sims + 1):
-        cards, round_mult, free_awarded = play_round(
-            symbols, n_panels, rng, bonus_trigger_count, free_scratches_awarded
-        )
+        cards, round_mult, free_awarded = play_round(cfg, symbols, n_panels, mode_name, rng)
 
         total_bet += 1.0
         total_paid += round_mult
@@ -142,6 +284,31 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
             max_win_mult = max(max_win_mult, round_mult)
         if free_awarded > 0:
             bonus_rounds += 1
+
+        round_had_meter_pop = False
+        round_had_key_trigger = False
+        round_had_kraken = False
+        round_had_kraken_hit = False
+        for _revealed, _win, _bonus, meter_pts, key_count, kraken, chest_sequences in cards:
+            if key_count > 0:
+                round_had_key_trigger = True
+            if chest_sequences and key_count == 0:
+                # at least one sequence this card wasn't from a key -> meter popped
+                round_had_meter_pop = True
+            elif chest_sequences and len(chest_sequences) > key_count:
+                round_had_meter_pop = True
+            if kraken:
+                round_had_kraken = True
+                if kraken["hit"]:
+                    round_had_kraken_hit = True
+        if round_had_meter_pop:
+            meter_pop_rounds += 1
+        if round_had_key_trigger:
+            key_trigger_rounds += 1
+        if round_had_kraken:
+            kraken_shown_rounds += 1
+        if round_had_kraken_hit:
+            kraken_hit_rounds += 1
 
         # Canonical payout value for THIS round, computed once and reused
         # for both the book and the lookup table below -- any float
@@ -157,7 +324,7 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
         if books_file:
             events = []
             idx = 0
-            for revealed, win_symbol, bonus_triggered in cards:
+            for revealed, win_symbol, bonus_triggered, meter_pts, key_count, kraken, chest_sequences in cards:
                 events.append({
                     "index": idx,
                     "type": "revealPanels",
@@ -165,6 +332,23 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
                     "gameType": "basegame" if idx == 0 else "freegame",
                 })
                 idx += 1
+                if kraken is not None:
+                    events.append({
+                        "index": idx,
+                        "type": "krakenResult",
+                        "playerNumber": kraken["player"],
+                        "krakenNumber": kraken["kraken"],
+                        "hit": kraken["hit"],
+                        "amount": cfg.kraken_match_mult if kraken["hit"] else 0,
+                    })
+                    idx += 1
+                for outcomes in chest_sequences:
+                    events.append({
+                        "index": idx,
+                        "type": "chestSequence",
+                        "chests": [{"id": oid, "kind": okind, "value": oval} for oid, okind, oval in outcomes],
+                    })
+                    idx += 1
             # NOTE: these "amount" fields are OUR OWN event schema, consumed
             # directly by the front end's book-event player as the real
             # decimal win multiplier (e.g. 1.5) -- NOT Stake's RGS wire
@@ -208,6 +392,10 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
     rtp = total_paid / total_bet
     hit_rate = wins / num_sims
     bonus_rate = bonus_rounds / num_sims
+    meter_pop_rate = meter_pop_rounds / num_sims
+    key_trigger_rate = key_trigger_rounds / num_sims
+    kraken_shown_rate = kraken_shown_rounds / num_sims
+    kraken_hit_rate = kraken_hit_rounds / num_sims
 
     return {
         "mode": mode_name,
@@ -216,6 +404,10 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
         "rtp": rtp,
         "hit_rate": hit_rate,
         "bonus_rate": bonus_rate,
+        "meter_pop_rate": meter_pop_rate,
+        "key_trigger_rate": key_trigger_rate,
+        "kraken_shown_rate": kraken_shown_rate,
+        "kraken_hit_rate": kraken_hit_rate,
         "max_win_mult": max_win_mult,
         "win_by_symbol": dict(win_by_symbol),
         "distinct_outcomes": len(set(mult for _, mult in lookup_rows)),
@@ -223,27 +415,27 @@ def simulate_mode(mode_name, cols, rows, symbols, bonus_trigger_count, free_scra
 
 
 def main():
-    config = GameConfig()
+    cfg = GameConfig()
     rng = random.Random(1337)  # fixed seed: reproducible report across runs
 
     results = []
-    for mode_name, spec in config.difficulties.items():
-        res = simulate_mode(
-            mode_name, spec["cols"], spec["rows"], spec["symbols"],
-            config.bonus_trigger_count, config.free_scratches_awarded,
-            SIMS_PER_MODE, rng,
-        )
+    for mode_name, spec in cfg.difficulties.items():
+        res = simulate_mode(mode_name, spec["cols"], spec["rows"], cfg, SIMS_PER_MODE, rng)
         results.append(res)
 
     print(f"\nSCRATCH -- Monte Carlo RTP report ({SIMS_PER_MODE:,} rounds per mode, "
-          f"bonus = {config.bonus_trigger_count}+ scatters -> {config.free_scratches_awarded} free scratches)\n")
-    header = f"{'Mode':<8}{'Grid':<8}{'RTP':<10}{'Hit rate':<12}{'Bonus rate':<13}{'Max win':<10}"
+          f"bonus = {cfg.bonus_trigger_count}+ scatters -> {cfg.free_scratches_awarded} free scratches)\n")
+    header = (f"{'Mode':<8}{'Grid':<8}{'RTP':<9}{'Hit rate':<11}{'Bonus':<9}"
+              f"{'MeterPop':<10}{'KeyTrig':<9}{'Kraken%':<10}{'KrknHit':<9}{'Max win':<10}")
     print(header)
     print("-" * len(header))
     for r in results:
         print(
-            f"{r['mode']:<8}{r['grid_size']:<8}{r['rtp']*100:>6.2f}%   "
-            f"{r['hit_rate']*100:>7.2f}%    {r['bonus_rate']*100:>8.4f}%    {r['max_win_mult']:>6g}x"
+            f"{r['mode']:<8}{r['grid_size']:<8}{r['rtp']*100:>6.2f}%  "
+            f"{r['hit_rate']*100:>7.2f}%  {r['bonus_rate']*100:>6.3f}%  "
+            f"{r['meter_pop_rate']*100:>7.3f}%  {r['key_trigger_rate']*100:>6.3f}%  "
+            f"{r['kraken_shown_rate']*100:>7.3f}%  {r['kraken_hit_rate']*100:>6.4f}%  "
+            f"{r['max_win_mult']:>6g}x"
         )
 
     print("\nWin breakdown by symbol, base card only (share of all wins):")

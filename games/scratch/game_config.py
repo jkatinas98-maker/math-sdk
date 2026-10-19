@@ -63,7 +63,7 @@ EASY_SYMBOLS = [
     # 3x5 grid (15 panels).
     SymbolDef("skull", "Skull & Crossbones", 0, 66.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.8, is_bonus=True),
-    SymbolDef("key", "Golden Key", 0, 0.5, is_key=True),
+    SymbolDef("key", "Golden Key", 0, 0.045, is_key=True),
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 14.1097),
     SymbolDef("mult2", "Crab", 2, 8.4658),
     SymbolDef("mult4", "Rum Barrel", 4, 5.6438),
@@ -76,7 +76,7 @@ MEDIUM_SYMBOLS = [
     # 3x4 grid (12 panels).
     SymbolDef("skull", "Skull & Crossbones", 0, 69.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.6, is_bonus=True),
-    SymbolDef("key", "Golden Key", 0, 0.4, is_key=True),
+    SymbolDef("key", "Golden Key", 0, 0.035, is_key=True),
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 17.5225),
     SymbolDef("mult2", "Crab", 2, 10.2215),
     SymbolDef("mult5", "Parrot", 5, 6.5709),
@@ -89,7 +89,7 @@ HARD_SYMBOLS = [
     # 3x3 grid (9 panels).
     SymbolDef("skull", "Skull & Crossbones", 0, 74.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.4, is_bonus=True),
-    SymbolDef("key", "Golden Key", 0, 0.3, is_key=True),
+    SymbolDef("key", "Golden Key", 0, 0.025, is_key=True),
     SymbolDef("mult2", "Crab", 2, 20.6734),
     SymbolDef("mult6", "Crossed Cutlasses", 6, 11.2764),
     SymbolDef("mult9", "Ship's Wheel", 9, 7.5176),
@@ -122,6 +122,89 @@ class GameConfig(Config):
 
         self.free_scratches_awarded = FREE_SCRATCHES_AWARDED
         self.bonus_trigger_count = BONUS_TRIGGER_COUNT
+
+        # --- Treasure Meter -------------------------------------------------
+        # Scanned on EVERY card in the round (base + any free-scratch cards),
+        # same scan as the normal 3-of-a-kind cash win but looking at a
+        # symbol's FINAL on-card count: landing 4-of-a-kind on any mult>0
+        # symbol adds treasure_meter_points[4], 5-or-more-of-a-kind adds
+        # treasure_meter_points[5] (not both -- whichever band the final
+        # count falls into). Points accumulate across the whole round; once
+        # the mode's threshold is reached the meter pops, fires one Treasure
+        # Chest case-opening sequence (3 chests), and resets to 0 (no
+        # carryover of the overflow).
+        #
+        # IMPORTANT, found while tuning: this game is stateless/single-
+        # request (one bet = one round = almost always exactly ONE card;
+        # see the module docstring). A single card averages only ~0.25
+        # (easy) / ~0.15 (medium) / ~0.07 (hard) meter points -- there is no
+        # way for that to reach a threshold anywhere near 30/15/5 within one
+        # round; free-scratch chains (the only way a round gets more than
+        # one card) are themselves rare. The thresholds below are rescaled
+        # to what a single round can plausibly reach (per-mode measured pop
+        # rate noted alongside each), NOT a persistent cross-session meter --
+        # a true "fills up over many ordinary spins" version of this would
+        # need the RGS to track state across separate bets and force the
+        # next bet into a bonus outcome, which this stateless template
+        # doesn't support without real platform-side work. Decided with the
+        # user to keep this per-round for now.
+        self.treasure_meter_threshold = {"easy": 4, "medium": 3, "hard": 3}  # ~0.012% / 0.016% / <0.001% pop rate
+        self.treasure_meter_points = {4: 1, 5: 2}
+
+        # --- Treasure Chest case-opening -------------------------------------
+        # Each `key` symbol landed on a card fires its own chest sequence
+        # (3 independent opens), same as a Treasure Meter pop. "chests per
+        # pop/key" is 3, not configurable per mode.
+        self.chests_per_trigger = 3
+        # One shared prize table (id, kind, value, weight) -- kind is
+        # 'cash' (value = flat multiplier added to the round, same per-$1
+        # units as every other win), 'multiplier' (value = multiplies the
+        # round's running total so far), 'retrigger' (+N more chest opens,
+        # value = how many), or 'key' (+N more chests via another key,
+        # value = how many keys). retrigger/key are capped by
+        # max_chest_opens in scratch_sim.py so a pathological run can't
+        # recurse forever.
+        # NOTE: weights below are PROVISIONAL -- tuned against
+        # scratch_sim.py's own Monte Carlo report (no separate calibrate.py
+        # tool exists in this repo despite the SymbolDef comment above; the
+        # weights were adjusted by re-running the simulator and reading its
+        # printed RTP), not run through an automated optimizer. Re-check
+        # after any art/UX change that alters feature frequency.
+        #
+        # First pass used much bigger cash values (2/6/20) and a much
+        # higher `key` draw weight and measured total RTP at 267%/192%/146%
+        # (easy/medium/hard) -- wildly over the 96% target. These values are
+        # cut ~5-15x from that pass to land total measured RTP at roughly
+        # 99-101% (easy/medium ~100%, hard ~99%) -- close to, but still a
+        # few points over, the 96% target. Landing exactly on 96% needs a
+        # final pass trimming the BASE symbol weights slightly now that
+        # these features add their own EV on top -- that's the next
+        # calibration step before resubmission, not done here.
+        self.chest_prize_table = [
+            ("cash_small", "cash", 0.5, 38.0),
+            ("cash_medium", "cash", 1.5, 22.0),
+            ("cash_large", "cash", 4.0, 7.0),
+            ("multiplier_boost", "multiplier", 1.5, 6.0),
+            ("retrigger", "retrigger", 2, 3.0),
+            ("key", "key", 1, 1.0),
+        ]
+        self.max_chest_opens_per_round = 60  # safety cap on retrigger/key recursion
+
+        # --- Kraken number-match -----------------------------------------
+        # Rarer trigger than first drafted (brief said "frequent"; at 10%
+        # per card this alone measured +9-10% RTP, so trigger chance is cut
+        # to keep its contribution modest -- see chest_prize_table note
+        # above for the same overall calibration pass). Hidden-number range
+        # and flat payout multiplier are unchanged from spec (1-10, flat
+        # 10x) -- only how often a card even attempts the roll was tuned.
+        # Each card independently has a per-difficulty chance to show the
+        # kraken at all; when it shows, the player's hidden 1-10 number is
+        # compared to the kraken's hidden 1-10 number (uniform, independent)
+        # -- a 1-in-10 match pays a flat kraken_match_mult, win or no win on
+        # that card otherwise.
+        self.kraken_trigger_chance = {"easy": 0.018, "medium": 0.018, "hard": 0.018}
+        self.kraken_number_range = 10  # 1..10 inclusive
+        self.kraken_match_mult = 10
 
         self.wincap = 1000.0  # highest possible single-ticket multiplier (Hard: 1000x)
         self.rtp = 0.96  # target TOTAL RTP (cash + bonus feature); scratch_sim.py reports measured values
