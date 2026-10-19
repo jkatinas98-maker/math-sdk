@@ -31,12 +31,19 @@ from src.config.config import BetMode
 class SymbolDef:
     """One scratch-panel symbol: id, display name, payout multiplier, relative draw weight."""
 
-    def __init__(self, symbol_id, name, mult, weight, is_bonus=False):
+    def __init__(self, symbol_id, name, mult, weight, is_bonus=False, is_key=False):
         self.id = symbol_id
         self.name = name
         self.mult = mult
         self.weight = weight
         self.is_bonus = is_bonus  # scatter: counts toward its own 3-of-a-kind trigger, never toward a cash win
+        # New feature symbol, not yet wired to a feature (see
+        # stake-scratch-game notes): meant to drop on its own and launch the
+        # Treasure Chest pick bonus directly. That trigger logic isn't built
+        # in scratch_sim.py yet -- this flag just reserves the id/weight so
+        # the symbol draws and shows end-to-end while the feature is built.
+        # Never counts toward a cash win (mult is always 0), same as bonus.
+        self.is_key = is_key
 
 
 # Shared symbol roster, values matching apps/scratch/src/game/config.ts
@@ -47,40 +54,48 @@ class SymbolDef:
 FREE_SCRATCHES_AWARDED = 10
 BONUS_TRIGGER_COUNT = 3
 
+# Pirate-theme display names (see the artist brief) -- ids (mult1_5, bonus,
+# key, ...) are unchanged and still match apps/scratch/src/game/config.ts
+# exactly; only the human-readable `name` changed, plus the new `key` entry.
+# `key`'s weight is provisional (not yet run through calibrate.py) since it
+# doesn't drive a feature yet -- see SymbolDef.is_key above.
 EASY_SYMBOLS = [
     # 3x5 grid (15 panels).
-    SymbolDef("skull", "Skull", 0, 66.0),
-    SymbolDef("bonus", "Bonus", 0, 0.8, is_bonus=True),
-    SymbolDef("mult1_5", "1.5x", 1.5, 14.1097),
-    SymbolDef("mult2", "2x", 2, 8.4658),
-    SymbolDef("mult4", "4x", 4, 5.6438),
-    SymbolDef("mult9", "9x", 9, 2.822),
-    SymbolDef("mult16", "16x", 16, 1.411),
-    SymbolDef("mult45", "45x", 45, 0.4938),
+    SymbolDef("skull", "Skull & Crossbones", 0, 66.0),
+    SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.8, is_bonus=True),
+    SymbolDef("key", "Golden Key", 0, 0.5, is_key=True),
+    SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 14.1097),
+    SymbolDef("mult2", "Crab", 2, 8.4658),
+    SymbolDef("mult4", "Rum Barrel", 4, 5.6438),
+    SymbolDef("mult9", "Ship's Wheel", 9, 2.822),
+    SymbolDef("mult16", "Spyglass & Compass", 16, 1.411),
+    SymbolDef("mult45", "Jolly Roger Flag", 45, 0.4938),
 ]
 
 MEDIUM_SYMBOLS = [
     # 3x4 grid (12 panels).
-    SymbolDef("skull", "Skull", 0, 69.0),
-    SymbolDef("bonus", "Bonus", 0, 0.6, is_bonus=True),
-    SymbolDef("mult1_5", "1.5x", 1.5, 17.5225),
-    SymbolDef("mult2", "2x", 2, 10.2215),
-    SymbolDef("mult5", "5x", 5, 6.5709),
-    SymbolDef("mult9", "9x", 9, 5.1107),
-    SymbolDef("mult41", "41x", 41, 2.9204),
-    SymbolDef("mult110", "110x", 110, 1.4602),
+    SymbolDef("skull", "Skull & Crossbones", 0, 69.0),
+    SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.6, is_bonus=True),
+    SymbolDef("key", "Golden Key", 0, 0.4, is_key=True),
+    SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 17.5225),
+    SymbolDef("mult2", "Crab", 2, 10.2215),
+    SymbolDef("mult5", "Parrot", 5, 6.5709),
+    SymbolDef("mult9", "Ship's Wheel", 9, 5.1107),
+    SymbolDef("mult41", "Treasure Map", 41, 2.9204),
+    SymbolDef("mult110", "Jeweled Crown", 110, 1.4602),
 ]
 
 HARD_SYMBOLS = [
     # 3x3 grid (9 panels).
-    SymbolDef("skull", "Skull", 0, 74.0),
-    SymbolDef("bonus", "Bonus", 0, 0.4, is_bonus=True),
-    SymbolDef("mult2", "2x", 2, 20.6734),
-    SymbolDef("mult6", "6x", 6, 11.2764),
-    SymbolDef("mult9", "9x", 9, 7.5176),
-    SymbolDef("mult36", "36x", 36, 4.6985),
-    SymbolDef("mult130", "130x", 130, 2.2553),
-    SymbolDef("mult1000", "1000x", 1000, 0.5638),
+    SymbolDef("skull", "Skull & Crossbones", 0, 74.0),
+    SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.4, is_bonus=True),
+    SymbolDef("key", "Golden Key", 0, 0.3, is_key=True),
+    SymbolDef("mult2", "Crab", 2, 20.6734),
+    SymbolDef("mult6", "Crossed Cutlasses", 6, 11.2764),
+    SymbolDef("mult9", "Ship's Wheel", 9, 7.5176),
+    SymbolDef("mult36", "Anchor", 36, 4.6985),
+    SymbolDef("mult130", "Gold Bars", 130, 2.2553),
+    SymbolDef("mult1000", "Overflowing Hoard", 1000, 0.5638),
 ]
 
 
