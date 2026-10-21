@@ -31,7 +31,7 @@ from src.config.config import BetMode
 class SymbolDef:
     """One scratch-panel symbol: id, display name, payout multiplier, relative draw weight."""
 
-    def __init__(self, symbol_id, name, mult, weight, is_bonus=False, is_key=False):
+    def __init__(self, symbol_id, name, mult, weight, is_bonus=False, is_key=False, is_kraken=False):
         self.id = symbol_id
         self.name = name
         self.mult = mult
@@ -44,6 +44,9 @@ class SymbolDef:
         # the symbol draws and shows end-to-end while the feature is built.
         # Never counts toward a cash win (mult is always 0), same as bonus.
         self.is_key = is_key
+        # Kraken feature symbol: landing one (or more) on a card opens the
+        # Kraken number-match on that card. Never counts toward a cash win.
+        self.is_kraken = is_kraken
 
 
 # Shared symbol roster, values matching apps/scratch/src/game/config.ts
@@ -64,6 +67,7 @@ EASY_SYMBOLS = [
     SymbolDef("skull", "Skull & Crossbones", 0, 66.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.8, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.045, is_key=True),
+    SymbolDef("kraken", "Kraken", 0, 1.5, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 14.1097),
     SymbolDef("mult2", "Crab", 2, 8.4658),
     SymbolDef("mult4", "Rum Barrel", 4, 5.6438),
@@ -77,6 +81,7 @@ MEDIUM_SYMBOLS = [
     SymbolDef("skull", "Skull & Crossbones", 0, 69.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.6, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.035, is_key=True),
+    SymbolDef("kraken", "Kraken", 0, 2.13, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 17.5225),
     SymbolDef("mult2", "Crab", 2, 10.2215),
     SymbolDef("mult5", "Parrot", 5, 6.5709),
@@ -90,6 +95,7 @@ HARD_SYMBOLS = [
     SymbolDef("skull", "Skull & Crossbones", 0, 74.0),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.4, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.025, is_key=True),
+    SymbolDef("kraken", "Kraken", 0, 3.05, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult2", "Crab", 2, 20.6734),
     SymbolDef("mult6", "Crossed Cutlasses", 6, 11.2764),
     SymbolDef("mult9", "Ship's Wheel", 9, 7.5176),
@@ -191,20 +197,30 @@ class GameConfig(Config):
         self.max_chest_opens_per_round = 60  # safety cap on retrigger/key recursion
 
         # --- Kraken number-match -----------------------------------------
-        # Rarer trigger than first drafted (brief said "frequent"; at 10%
-        # per card this alone measured +9-10% RTP, so trigger chance is cut
-        # to keep its contribution modest -- see chest_prize_table note
-        # above for the same overall calibration pass). Hidden-number range
-        # and flat payout multiplier are unchanged from spec (1-10, flat
-        # 10x) -- only how often a card even attempts the roll was tuned.
-        # Each card independently has a per-difficulty chance to show the
-        # kraken at all; when it shows, the player's hidden 1-10 number is
-        # compared to the kraken's hidden 1-10 number (uniform, independent)
-        # -- a 1-in-10 match pays a flat kraken_match_mult, win or no win on
-        # that card otherwise.
-        self.kraken_trigger_chance = {"easy": 0.018, "medium": 0.018, "hard": 0.018}
+        # Driven by the `kraken` SYMBOL (see *_SYMBOLS above), weighted so
+        # that ~1 in 5 cards lands at least one. A card with >=1 kraken
+        # opens the number match: the player's hidden number and the
+        # kraken's hidden number (each uniform 1..kraken_number_range) are
+        # compared -- a match (1 in 10) opens a CS2-style case reel that
+        # lands on a multiplier of the bet drawn from that mode's prize
+        # table below: 2x up to the mode's own max win. Weights fall off as
+        # mult^-~1.3 so the average prize is ~4x, i.e. the whole feature
+        # is worth ~0.2 * 0.1 * 4 = ~8% RTP; the base symbols are
+        # calibrated around it (calibrate.py) for 96% total.
         self.kraken_number_range = 10  # 1..10 inclusive
-        self.kraken_match_mult = 10
+        self.kraken_prize_table = {
+            "easy": [(2, 4785.1), (3, 2830.7), (5, 1461.0), (10, 595.5), (20, 242.7), (45, 84.9)],
+            "medium": [(2, 4967.8), (3, 2845.1), (5, 1409.7), (10, 543.6), (25, 154.3), (50, 59.5), (110, 20.1)],
+            "hard": [
+                (2, 4986.9), (3, 2859.3), (5, 1418.8), (10, 548.2),
+                (25, 156.0), (100, 23.3), (250, 6.6), (1000, 1.0),
+            ],
+        }
+
+        # Per-mode maximum payout for a whole round (base card + free
+        # scratches + every feature). Matches the front end's "Win up to
+        # Nx" banner; a round's total is capped here.
+        self.mode_max_win = {"easy": 45.0, "medium": 110.0, "hard": 1000.0}
 
         self.wincap = 1000.0  # highest possible single-ticket multiplier (Hard: 1000x)
         self.rtp = 0.96  # target TOTAL RTP (cash + bonus feature); scratch_sim.py reports measured values
@@ -225,7 +241,7 @@ class GameConfig(Config):
                 name=diff_name,
                 cost=1.0,
                 rtp=self.rtp,
-                max_win=self.wincap,
+                max_win=self.mode_max_win[diff_name],
                 auto_close_disabled=False,
                 is_feature=True,  # has the bonus-scatter free-scratch feature
                 is_buybonus=False,

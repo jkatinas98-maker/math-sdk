@@ -24,11 +24,12 @@ for a single-draw scratch ticket). Instead it:
          retrigger / another key). All chests always resolve -- retrigger
          and key outcomes queue MORE chest opens (capped), they don't end
          the sequence early.
-       - Kraken number-match: every card independently has a per-difficulty
-         chance to show the kraken at all (frequent); when it shows, a
-         hidden player number and a hidden kraken number (both 1..10,
-         uniform) are compared -- a match (rare, ~1-in-10 of the cards that
-         show it) pays a flat kraken_match_mult.
+       - Kraken number-match: landing >=1 `kraken` symbol on a card (~1 in
+         5 cards) opens it; a hidden player number and a hidden kraken
+         number (both 1..10, uniform) are compared -- a match (1 in 10)
+         pays a multiplier drawn from the mode's kraken_prize_table (2x up
+         to the mode max), shown as a CS2-style case reel.
+       - Every round's total payout is capped at the mode's max win.
   2. Measures real total RTP (cash wins + every feature's EV), hit
      frequency, bonus-trigger frequency, treasure-meter-pop frequency,
      kraken-hit frequency, and win distribution per difficulty.
@@ -44,13 +45,11 @@ for a single-draw scratch ticket). Instead it:
          standard math-sdk "lookup table" shape the RGS uses to pick a
          weighted-random outcome per real bet)
 
-NOTE ON WEIGHT CALIBRATION: the Treasure Meter / Chest / Kraken weights in
-game_config.py are PROVISIONAL. There is no automated `calibrate.py` in this
-repo (despite an older comment referencing one) -- they were hand-tuned by
-re-running this file and reading its printed RTP report, nudging
-chest_prize_table / kraken_trigger_chance / treasure_meter_threshold until
-each mode's measured total RTP landed back near game_config.py's 0.96
-target. Re-run and re-check after any further change to these mechanics.
+NOTE ON WEIGHT CALIBRATION: calibrate.py sets the `kraken` weight so ~1 in
+5 cards land one, then binary-searches each mode's `skull` weight until
+total RTP (all features, after the max-win cap) is 96%. Re-run it after any
+change to symbols, prize tables or feature rules, paste the printed weights
+into game_config.py, then run this file to verify + export.
 
 Run:
     python3 scratch_sim.py
@@ -128,7 +127,19 @@ def resolve_chest_sequence(prize_table, chests_per_trigger, num_opens, rng, open
     return outcomes, total, opened
 
 
-def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, kraken_chance, kraken_range):
+def roll_weighted(table, rng):
+    """table rows are (value, weight)."""
+    total = sum(w for _, w in table)
+    r = rng.random() * total
+    acc = 0.0
+    for value, w in table:
+        acc += w
+        if r < acc:
+            return value
+    return table[-1][0]
+
+
+def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, kraken_range, kraken_prizes):
     """Draw every panel on one card (no early stop -- matches the front end,
     which always reveals the full grid).
 
@@ -140,6 +151,7 @@ def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, k
     win_symbol = None
     bonus_count = 0
     key_count = 0
+    kraken_count = 0
     for _ in range(n_panels):
         sym = weighted_choice(symbols, rng)
         revealed.append(sym)
@@ -148,6 +160,9 @@ def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, k
             continue
         if sym.is_key:
             key_count += 1
+            continue
+        if sym.is_kraken:
+            kraken_count += 1
             continue
         if sym.mult > 0:
             counts[sym.id] += 1
@@ -162,10 +177,16 @@ def play_card(symbols, n_panels, rng, bonus_trigger_count, meter_points_table, k
             meter_points += meter_points_table[4]
 
     kraken = None
-    if rng.random() < kraken_chance:
+    if kraken_count > 0:
         player_num = rng.randint(1, kraken_range)
         kraken_num = rng.randint(1, kraken_range)
-        kraken = {"player": player_num, "kraken": kraken_num, "hit": player_num == kraken_num}
+        hit = player_num == kraken_num
+        kraken = {
+            "player": player_num,
+            "kraken": kraken_num,
+            "hit": hit,
+            "mult": roll_weighted(kraken_prizes, rng) if hit else 0,
+        }
 
     return revealed, win_symbol, bonus_count >= bonus_trigger_count, meter_points, key_count, kraken
 
@@ -189,9 +210,9 @@ def play_round(cfg, symbols, n_panels, mode_name, rng, max_cards=200):
     chests_per_trigger = cfg.chests_per_trigger
     prize_table = cfg.chest_prize_table
     max_chest_opens = cfg.max_chest_opens_per_round
-    kraken_chance = cfg.kraken_trigger_chance[mode_name]
     kraken_range = cfg.kraken_number_range
-    kraken_mult = cfg.kraken_match_mult
+    kraken_prizes = cfg.kraken_prize_table[mode_name]
+    max_win = cfg.mode_max_win[mode_name]
 
     cards = []
     total_mult = 0.0
@@ -203,7 +224,7 @@ def play_round(cfg, symbols, n_panels, mode_name, rng, max_cards=200):
     while queue > 0 and len(cards) < max_cards:
         queue -= 1
         revealed, win_symbol, bonus_triggered, meter_pts, key_count, kraken = play_card(
-            symbols, n_panels, rng, cfg.bonus_trigger_count, meter_points_table, kraken_chance, kraken_range,
+            symbols, n_panels, rng, cfg.bonus_trigger_count, meter_points_table, kraken_range, kraken_prizes,
         )
         mult = win_symbol.mult if win_symbol else 0.0
         total_mult += mult
@@ -213,7 +234,7 @@ def play_round(cfg, symbols, n_panels, mode_name, rng, max_cards=200):
             queue += cfg.free_scratches_awarded
 
         if kraken and kraken["hit"]:
-            total_mult += kraken_mult
+            total_mult += kraken["mult"]
 
         meter_points_acc += meter_pts
         chest_triggers = key_count
@@ -234,6 +255,8 @@ def play_round(cfg, symbols, n_panels, mode_name, rng, max_cards=200):
 
         cards.append((revealed, win_symbol, bonus_triggered, meter_pts, key_count, kraken, card_chest_sequences))
 
+    # The mode's advertised max win caps the whole round.
+    total_mult = min(total_mult, max_win)
     return cards, total_mult, total_free_awarded
 
 
@@ -339,7 +362,10 @@ def simulate_mode(mode_name, cols, rows, cfg, num_sims, rng, write_books=True):
                         "playerNumber": kraken["player"],
                         "krakenNumber": kraken["kraken"],
                         "hit": kraken["hit"],
-                        "amount": cfg.kraken_match_mult if kraken["hit"] else 0,
+                        # prize multiplier the case reel lands on (0 on a miss);
+                        # amount is the same per-$1 value, like every other event
+                        "multiplier": kraken["mult"],
+                        "amount": kraken["mult"],
                     })
                     idx += 1
                 for outcomes in chest_sequences:
