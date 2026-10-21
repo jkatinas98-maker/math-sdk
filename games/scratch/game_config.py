@@ -64,10 +64,10 @@ BONUS_TRIGGER_COUNT = 3
 # doesn't drive a feature yet -- see SymbolDef.is_key above.
 EASY_SYMBOLS = [
     # 3x5 grid (15 panels).
-    SymbolDef("skull", "Skull & Crossbones", 0, 66.0),
+    SymbolDef("skull", "Skull & Crossbones", 0, 70.8696),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.8, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.045, is_key=True),
-    SymbolDef("kraken", "Kraken", 0, 1.5, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
+    SymbolDef("kraken", "Kraken", 0, 1.5686, is_kraken=True),  # calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 14.1097),
     SymbolDef("mult2", "Crab", 2, 8.4658),
     SymbolDef("mult4", "Rum Barrel", 4, 5.6438),
@@ -78,10 +78,10 @@ EASY_SYMBOLS = [
 
 MEDIUM_SYMBOLS = [
     # 3x4 grid (12 panels).
-    SymbolDef("skull", "Skull & Crossbones", 0, 69.0),
+    SymbolDef("skull", "Skull & Crossbones", 0, 72.3546),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.6, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.035, is_key=True),
-    SymbolDef("kraken", "Kraken", 0, 2.13, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
+    SymbolDef("kraken", "Kraken", 0, 2.1922, is_kraken=True),  # calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult1_5", "Flintlock Pistol", 1.5, 17.5225),
     SymbolDef("mult2", "Crab", 2, 10.2215),
     SymbolDef("mult5", "Parrot", 5, 6.5709),
@@ -92,10 +92,10 @@ MEDIUM_SYMBOLS = [
 
 HARD_SYMBOLS = [
     # 3x3 grid (9 panels).
-    SymbolDef("skull", "Skull & Crossbones", 0, 74.0),
+    SymbolDef("skull", "Skull & Crossbones", 0, 75.6325),
     SymbolDef("bonus", "Treasure Chest (scatter)", 0, 0.4, is_bonus=True),
     SymbolDef("key", "Golden Key", 0, 0.025, is_key=True),
-    SymbolDef("kraken", "Kraken", 0, 3.05, is_kraken=True),  # weight set by calibrate.py: ~1 in 5 cards land >=1
+    SymbolDef("kraken", "Kraken", 0, 3.0888, is_kraken=True),  # calibrate.py: ~1 in 5 cards land >=1
     SymbolDef("mult2", "Crab", 2, 20.6734),
     SymbolDef("mult6", "Crossed Cutlasses", 6, 11.2764),
     SymbolDef("mult9", "Ship's Wheel", 9, 7.5176),
