@@ -87,7 +87,7 @@ def main():
 
     print(f"\nPublish package ready in: {OUT_DIR}")
     print("Upload every file in that folder (index.json + the 3 .jsonl.zst + 3 .csv) "
-          "via the Files tab in studio.engine.io for the EMOJI SCRATCH game.")
+          "via the Files tab in studio.engine.io for the PIRATE SCRATCH game.")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,10 @@
 """
+NOTE (Pirate Scratch): the game's rules, tables and weights now live in
+rules.py (+ weights.json from calibrate.py); scratch_sim.py generates the
+books from those. The symbol lists and feature notes below are the older
+version, kept only because the SDK Config/BetMode wiring is defined here.
+"""
+"""
 Game configuration for SCRATCH.
 
 A single-request (stateless) scratch-ticket game, closer to the `fifty_fifty`

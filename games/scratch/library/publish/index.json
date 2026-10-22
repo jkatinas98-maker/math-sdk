@@ -1,0 +1,22 @@
+{
+  "modes": [
+    {
+      "name": "easy",
+      "cost": 1.0,
+      "events": "books_easy.jsonl.zst",
+      "weights": "lookup_easy.csv"
+    },
+    {
+      "name": "medium",
+      "cost": 1.0,
+      "events": "books_medium.jsonl.zst",
+      "weights": "lookup_medium.csv"
+    },
+    {
+      "name": "hard",
+      "cost": 1.0,
+      "events": "books_hard.jsonl.zst",
+      "weights": "lookup_hard.csv"
+    }
+  ]
+}
