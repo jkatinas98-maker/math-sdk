@@ -47,15 +47,15 @@ from dataclasses import dataclass, field
 # ---------------------------------------------------------------------------
 
 MODES = ("easy", "medium", "hard")
-MAX_WIN = {"easy": 45, "medium": 110, "hard": 1000}  # per round (base + bonus + features)
+MAX_WIN = {"easy": 110, "medium": 1000, "hard": 2500}  # per round (base + bonus + features)
 TARGET_RTP = 0.96
 GRID = {"easy": (3, 5), "medium": (3, 4), "hard": (3, 3)}  # cols, rows
 
 # Paying symbols per mode: id -> multiplier.
 PAYING = {
-    "easy": {"mult1_5": 1.5, "mult2": 2, "mult4": 4, "mult9": 9, "mult16": 16, "mult45": 45},
-    "medium": {"mult1_5": 1.5, "mult2": 2, "mult5": 5, "mult9": 9, "mult41": 41, "mult110": 110},
-    "hard": {"mult2": 2, "mult6": 6, "mult9": 9, "mult36": 36, "mult130": 130, "mult1000": 1000},
+    "easy": {"mult1_5": 1.5, "mult2": 2, "mult4": 4, "mult16": 16, "mult45": 45, "mult110": 110},
+    "medium": {"mult1_5": 1.5, "mult2": 2, "mult5": 5, "mult41": 41, "mult110": 110, "mult1000": 1000},
+    "hard": {"mult2": 2, "mult6": 6, "mult9": 9, "mult36": 36, "mult130": 130, "mult1000": 1000, "mult2500": 2500},
 }
 
 FEATURE_SYMBOLS = ("bonus", "key", "kraken", "shark")
@@ -86,9 +86,9 @@ KRAKEN_PRIZE_TABLE = {
 # the card) is very strong on the high-variance modes, so it's rarer there;
 # Bonus via Shark Bite is 4% of rolls (~1 in 250 cards).
 SHARK_OUTCOMES = {
-    "easy": [("kraken", 49), ("octopus", 25), ("pirate", 10), ("key", 12), ("bonus", 4)],
-    "medium": [("kraken", 53), ("octopus", 25), ("pirate", 6), ("key", 12), ("bonus", 4)],
-    "hard": [("kraken", 57), ("octopus", 25), ("pirate", 2), ("key", 12), ("bonus", 4)],
+    "easy": [("kraken", 53), ("octopus", 25), ("pirate", 6), ("key", 12), ("bonus", 4)],
+    "medium": [("kraken", 57.5), ("octopus", 25), ("pirate", 1.5), ("key", 12), ("bonus", 4)],
+    "hard": [("kraken", 58), ("octopus", 25), ("pirate", 1), ("key", 12), ("bonus", 4)],
 }
 OCTOPUS_EXTRA_CARDS = 3
 

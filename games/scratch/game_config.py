@@ -226,9 +226,9 @@ class GameConfig(Config):
         # Per-mode maximum payout for a whole round (base card + free
         # scratches + every feature). Matches the front end's "Win up to
         # Nx" banner; a round's total is capped here.
-        self.mode_max_win = {"easy": 45.0, "medium": 110.0, "hard": 1000.0}
+        self.mode_max_win = {"easy": 110.0, "medium": 1000.0, "hard": 2500.0}
 
-        self.wincap = 1000.0  # highest possible single-ticket multiplier (Hard: 1000x)
+        self.wincap = 2500.0  # highest possible single-ticket multiplier (Hard: 2500x)
         self.rtp = 0.96  # target TOTAL RTP (cash + bonus feature); scratch_sim.py reports measured values
 
         self.construct_paths()

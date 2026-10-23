@@ -28,9 +28,11 @@ ITERATIONS = 16
 
 # Paying-symbol base weights (relative shape within a mode -- unchanged).
 BASE = {
-    "easy": {"mult1_5": 14.1097, "mult2": 8.4658, "mult4": 5.6438, "mult9": 2.822, "mult16": 1.411, "mult45": 0.4938},
-    "medium": {"mult1_5": 17.5225, "mult2": 10.2215, "mult5": 6.5709, "mult9": 5.1107, "mult41": 2.9204, "mult110": 1.4602},
-    "hard": {"mult2": 20.6734, "mult6": 11.2764, "mult9": 7.5176, "mult36": 4.6985, "mult130": 2.2553, "mult1000": 0.5638},
+    # Paying-symbol weights. Each tier keeps roughly the RTP share its tier
+    # had before the v2 paytable (bigger multiplier -> rarer symbol).
+    "easy": {"mult1_5": 14.1097, "mult2": 8.4658, "mult4": 5.6438, "mult16": 2.3038, "mult45": 0.9907, "mult110": 0.3656},
+    "medium": {"mult1_5": 17.5225, "mult2": 10.2215, "mult5": 6.5709, "mult41": 2.9922, "mult110": 2.0769, "mult1000": 0.6921},
+    "hard": {"mult2": 17.9649, "mult6": 11.7362, "mult9": 8.5658, "mult36": 4.0919, "mult130": 2.6814, "mult1000": 1.0075, "mult2500": 0.3699},
 }
 
 # Target per-card frequencies (probability a card shows the feature).
@@ -94,7 +96,9 @@ def measure(mode, table, rounds, seed=2026):
 
 
 def calibrate(mode, rounds=SEARCH_ROUNDS):
-    lo, hi = 20.0, 2000.0
+    # Upper bound kept well below where a full skull grid gets common (its
+    # prize grows with the skull weight, so past ~250 RTP rises again).
+    lo, hi = 20.0, 250.0
     for _ in range(ITERATIONS):
         mid = math.sqrt(lo * hi)
         rtp = measure(mode, build_weights(mode, mid), rounds)
