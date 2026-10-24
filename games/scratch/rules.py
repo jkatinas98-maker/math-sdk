@@ -62,6 +62,9 @@ FEATURE_SYMBOLS = ("bonus", "key", "kraken", "shark")
 ONE_PER_CARD = ("kraken", "shark", "key")
 
 FREE_SCRATCHES_AWARDED = 10
+# A bonus (all its free cards together) always pays at least this many
+# times the bet; any shortfall is topped up at the end of the bonus.
+BONUS_MINIMUM = {"easy": 5, "medium": 5, "hard": 5}
 BONUS_TRIGGER_COUNT = 3
 MAX_FREE_CARDS = 100  # safety cap on retrigger chains
 
@@ -323,6 +326,12 @@ def play_round(mode, weights: Weights, rng, max_win):
             bonus_mult = round(bonus_mult + c.amount, 2)
             events.append({"type": "bonusMultiplier", "added": c.amount, "total": bonus_mult})
             total += bonus_mult
+    if free_played:
+        bonus_paid = round(total - base.amount, 2)
+        if bonus_paid < BONUS_MINIMUM[mode]:
+            top_up = round(BONUS_MINIMUM[mode] - bonus_paid, 2)
+            total += top_up
+            events.append({"type": "bonusMinimum", "amount": top_up, "minimum": BONUS_MINIMUM[mode]})
     total = round(total, 2)
     payout = min(total, max_win)
     events.append({"type": "setTotalWin", "amount": payout})
